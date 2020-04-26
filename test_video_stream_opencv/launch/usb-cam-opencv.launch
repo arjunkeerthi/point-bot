@@ -1,0 +1,18 @@
+<launch>
+	<include ns="stereo" file="$(find video_stream_opencv)/launch/camera.launch">
+		<arg name="camera_name" value="usb_webcam" />
+		<arg name="video_stream_provider" value="1" />
+		<arg name="set_camera_fps" value="30" />
+		<arg name="buffer_queue_size" value="5" />
+		<arg name="fps" value="30" />
+		<arg name="frame_id" value="usb_webcam" />
+		<!--
+		<arg name="camera_info_url" value="" />
+		-->
+        <arg name="width" value="432" />
+        <arg name="height" value="240" />
+		<arg name="flip_horizontal" value="false" />
+		<arg name="flip_vertical" value="false" />
+		<arg name="visualize" value="true" />
+	</include>
+</launch>
