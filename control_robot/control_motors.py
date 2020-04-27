@@ -55,19 +55,24 @@ diameter = 0.067 # meters
 ticks_per_rev = 20
 drive_radius = 0.3 # meters
 wheel_base = 0.131 # meters
-speed_scale_factor = 2
+speed_scale_factor = 1.25
+depth_scale_factor = 0.1
 
 # Initially, want robot at rest
 target_left_ticks = 0
 target_right_ticks = 0
 
 # PID constants
-kp = 0.2
-kd = 0.05
+kp = 0.5
+kd = 0.2
 ki = 0.1
 
 # Interval between correction updates
 interval = 0.8 # seconds
+
+# Estimate for depth straight ahead from robot (middle of image from webcam)
+# Initialize to some high value
+middle_depth = 100
 
 # Flag to stop robot
 stop = False
@@ -148,16 +153,16 @@ def move():
         # Compute error
         left_error = target_left_ticks - curr_left_ticks
         right_error = target_right_ticks - curr_right_ticks
-        #print("curr_left_ticks: ", curr_left_ticks)
-        #print("curr_right_ticks: ", curr_right_ticks)
-        #print("left_speed: ", calc_speed(curr_left_ticks, 0.8))
-        #print("right_speed: ", calc_speed(curr_right_ticks, 0.8))
-        #print("left_error: ", kp*left_error)
-        #print("right_error: ", kp*right_error)
+        print("curr_left_ticks: ", curr_left_ticks)
+        print("curr_right_ticks: ", curr_right_ticks)
+        print("left_speed: ", calc_speed(curr_left_ticks, 0.8))
+        print("right_speed: ", calc_speed(curr_right_ticks, 0.8))
+        print("left_error: ", kp*left_error)
+        print("right_error: ", kp*right_error)
 
         # Add correction
-        left_duty += min(max(kp*left_error + kd*left_prev_error + ki*left_sum_error, 0), 100)
-        right_duty += min(max(kp*right_error + kd*right_prev_error + ki*right_sum_error, 0), 100)
+        left_duty = min(max(left_duty + kp*left_error + kd*left_prev_error + ki*left_sum_error, 0), 100)
+        right_duty = min(max(right_duty + kp*right_error + kd*right_prev_error + ki*right_sum_error, 0), 100)
         print("left_duty: ", left_duty)
         print("right_duty: ", right_duty)
         print()
@@ -187,7 +192,10 @@ def move():
 
 
 def motor_callback(point):
+    global target_left_ticks, target_right_ticks, stop
+
     distance = point.x
+    print("Distance received: ", distance)
     angle = point.y
     vel_left = get_left_velocity(angle)
     vel_right = get_right_velocity(angle)
@@ -206,14 +214,34 @@ def motor_callback(point):
     vel_left *= speed_scale
     vel_right *= speed_scale
 
+    # Adjust for estimated depth ahead of robot, but give smaller weight
+    # due to inaccuracy of depth estimation
+    scaled_depth = (100 / middle_depth) * depth_scale_factor
+    vel_left -= scaled_depth
+    vel_right -= scaled_depth
+
     # Get target ticks for left and right wheels in interval
-    target_left_ticks = velocity_to_ticks(adj_vel_left)
-    target_right_ticks = velocity_to_ticks(adj_vel_right)
+    target_left_ticks = velocity_to_ticks(vel_left)
+    target_right_ticks = velocity_to_ticks(vel_right)
+    print("vel_left: ", vel_left)
+    print("vel_right: ", vel_right)
+    print("target_left_ticks: ", target_left_ticks)
+    print("target_right_ticks: ", target_right_ticks)
+
+
+def depth_callback(point):
+    middle_depth = point.x
+    #print("average depth: ", middle_depth)
+
+
+def dummy(point):
+    print("In dummy: ", point.x)
 
 
 def listener():
     rospy.init_node('control_motor_listener', anonymous=True)
-    rospy.Subscriber("/control_robot/distance_angle", motor_callback)
+    rospy.Subscriber("/control_robot/distance_angle", Point, motor_callback)
+    rospy.Subscriber("/control_robot/middle_depth", Point, depth_callback)
     rospy.spin()
 
 
@@ -221,3 +249,10 @@ if __name__ == "__main__":
     move_thread = threading.Thread(target=move)
     move_thread.start()
     listener()
+    stop = True
+    move_thread.join()
+    #GPIO.output(ENR, GPIO.LOW)
+    #GPIO.output(ENL, GPIO.LOW)
+    #motorR.stop()
+    #motorL.stop()
+    #GPIO.cleanup()
