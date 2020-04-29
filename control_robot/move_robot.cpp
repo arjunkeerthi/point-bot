@@ -12,6 +12,7 @@
 //#include "opencv2/contrib/contrib.hpp"
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/Image.h>
+#include <geometry_msgs/Point.h>
 #include <stdio.h>
 #include <cmath>
 
@@ -19,6 +20,7 @@
 cv::Ptr<cv::StereoBM> sbm;
 cv::Ptr<cv::StereoSGBM> sgbm;
 image_transport::Publisher disp_pub;
+ros::Publisher depth_pub;
 
 void imageCallback(const sensor_msgs::ImageConstPtr& imageL, const sensor_msgs::ImageConstPtr& imageR) {
     try {
@@ -27,10 +29,16 @@ void imageCallback(const sensor_msgs::ImageConstPtr& imageL, const sensor_msgs::
            converted to grayscale */
         cv::Mat cvImageL = cv_bridge::toCvShare(imageL, "bgr8")->image;
         cv::Mat cvImageR = cv_bridge::toCvShare(imageR, "bgr8")->image;
+        cv::imwrite("src/control_robot/left_rectified_image.png", cvImageL);
+        cv::imwrite("src/control_robot/right_rectified_image.png", cvImageR);
         cv::Mat grayL, grayR;
         cv::cvtColor(cvImageL, grayL, cv::COLOR_BGR2GRAY);
         cv::cvtColor(cvImageR, grayR, cv::COLOR_BGR2GRAY);
-
+        cv::Rect rect(108, 60, 216, 120);
+        cv::Rect rect2(144, 80, 144, 80);
+        cv::rectangle(cvImageL, rect, cv::Scalar(0,0,255));
+        cv::rectangle(cvImageL, rect2, cv::Scalar(0,0,255));
+        cv::imwrite("src/control_robot/left_rectangle.png", cvImageL);
         /* Display left and right rectified images */
         //cv::imshow("left_rect_color", cvImageL);
         //cv::imshow("right_rect_color", cvImageR);
@@ -117,6 +125,8 @@ void imageCallback(const sensor_msgs::ImageConstPtr& imageL, const sensor_msgs::
         /* cv::applyColorMap(disp8, disp8, cv::COLORMAP_JET);
         cv::imshow("disparity", disp8); */
 
+        cv::imwrite("src/control_robot/disparity_image.png", disp8);
+
         /* Convert disparity image to ROS Image message and publish to
            "/control_robot/disparity_image" topic */
         sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", disp8).toImageMsg();
@@ -130,18 +140,22 @@ void imageCallback(const sensor_msgs::ImageConstPtr& imageL, const sensor_msgs::
 
         /* TODO: Work on attempts at depth below or move to separate node */
 
+        /* Will only compute depth on middle section (divide disparity map
+           into 3x3 grid and compute average depth on middle rectangle) */
+        cv::Mat middle = cv::Mat(disp8, cv::Range(80,160), cv::Range(144,288));
+
         /* Construct Q matrix using camera matrix from camera calibration */
         /*float Q_data[16] = { 1, 0, 0, -214.1453037549374, 0, 1, 0, -122.8193944709537, 0, 0, -1/0.064, (214.1453037549374-223.5827604021137)/0.064 };
         cv::Mat Q = cv::Mat(4, 4, CV_32F, Q_data);*/
 
         /* Calculate 3D points for each pixel in disparity map.
            Uses (wx,wy,wz,w) = Q * (c, r, disparity, 1); */
-        /*cv::Mat disp32;
-        disp.convertTo(disp32, CV_32F, 1./16);
-        cv::Mat norm_depth = cv::Mat(disp32.rows, disp32.cols, CV_32F);
-        for(int r = 0; r < disp32.rows; r++) {
-            for(int c = 0; c < disp32.cols; c++) {
-                uchar d = disp32.at<uchar>(r,c);
+        /*middle.convertTo(middle, CV_32F, 1./16);
+        middle.convertTo(middle, CV_32F);
+        cv::Mat norm_depth = cv::Mat(middle.rows, middle.cols, CV_32F);
+        for(int r = 0; r < middle.rows; r++) {
+            for(int c = 0; c < middle.cols; c++) {
+                uchar d = middle.at<uchar>(r,c);
                 float pts[4] = {c, r, d, 1};
                 cv::Mat s = cv::Mat(4,1,CV_32F,pts);
                 cv::Mat t = Q * s;
@@ -159,11 +173,12 @@ void imageCallback(const sensor_msgs::ImageConstPtr& imageL, const sensor_msgs::
                 // Currently attempting to just calculate distance of 3D point
                 // from origin (assumed to be left camera)
                 norm_depth.at<float>(r,c) = sqrt(pow(x,2) + pow(y,2) + pow(z,2));
+                //norm_depth.at<float>(r,c) = std::abs(z);
             }
         }
         cv::Mat test_depth;
-        normalize(norm_depth, test_depth, 0, 255, CV_MINMAX, CV_8U); */
-        //std::cout << test_depth << std::endl << std::endl;
+        normalize(norm_depth, test_depth, 0, 255, CV_MINMAX, CV_8U);
+        std::cout << test_depth << std::endl << std::endl;*/
 
         /* Try to use OpenCV's reprojectTo3D() function - currently giving
            many INF value due to holes in disparity map, hence the above manual
@@ -194,21 +209,37 @@ void imageCallback(const sensor_msgs::ImageConstPtr& imageL, const sensor_msgs::
 
         /* Another attempt at depth calculation, using
            depth = focal_length * baseline / disparity.
-           Fix hole problem my increasing values from 0 to 1 (not good either) */
-        /*disp8 += 1;
-        disp8.convertTo(disp8, CV_32F);
+           Fix hole problem by increasing values from 0 to 1 (not good either) */
+        middle += 1;
+        //std::cout << middle << std::endl << std::endl;
+        middle.convertTo(middle, CV_32F);
         float fx = 340.3432526334113;
         float fy = 340.53122558882;
         float b = 0.064;
-        cv::Mat test_depth = (fx * b) / disp8;
-        normalize(test_depth, test_depth, 0, 255, CV_MINMAX, CV_8U); */
+        cv::Mat test_depth = (fx * b) / middle;
+        normalize(test_depth, test_depth, 0, 255, CV_MINMAX, CV_8U);
 
         /* Display depth map */
-        /*std::cout << test_depth << std::endl << std::endl;
-        cv::applyColorMap(test_depth, test_depth, cv::COLORMAP_JET);
-        cv::imshow("depth", test_depth);*/
+        //std::cout << test_depth << std::endl << std::endl;
+        //cv::applyColorMap(test_depth, test_depth, cv::COLORMAP_JET);
+        cv::imshow("middle_depth", test_depth);
+        cv::imwrite("middle_depth.png", test_depth);
 
-        //cv::waitKey(30);
+        cv::Scalar average = cv::mean(test_depth);
+        float avg_depth = average[0];
+        std::string s("FAR");
+        if(avg_depth < 170 && avg_depth > 130) {
+            s = "NEAR";
+        } else if (avg_depth <= 130) {
+            s = "CLOSE!!!";
+        }
+        std::cout << s << std::endl;
+
+        geometry_msgs::Point d;
+        d.x = avg_depth;
+        depth_pub.publish(d);
+
+        cv::waitKey(30);
     } catch(cv_bridge::Exception& e) {
         ROS_ERROR("Could not convert from '%s' to 'bgr8'.", imageL->encoding.c_str());
     }
@@ -264,6 +295,7 @@ int main(int argc, char **argv) {
 
     /* Publisher to publish disparity map */
     disp_pub = it.advertise("control_robot/disparity_image", 1);
+    depth_pub = nh.advertise<geometry_msgs::Point>("control_robot/middle_depth", 1);
 
     /* Approximate Time Synchronizer is used to get images from left and right
        cameras that approximately have the same timestamp */

@@ -55,7 +55,7 @@ diameter = 0.067 # meters
 ticks_per_rev = 20
 drive_radius = 0.3 # meters
 wheel_base = 0.131 # meters
-speed_scale_factor = 1.25
+speed_scale_factor = 10
 depth_scale_factor = 0.1
 
 # Initially, want robot at rest
@@ -72,7 +72,7 @@ interval = 0.8 # seconds
 
 # Estimate for depth straight ahead from robot (middle of image from webcam)
 # Initialize to some high value
-middle_depth = 100
+middle_depth = 10000
 
 # Flag to stop robot
 stop = False
@@ -80,6 +80,8 @@ stop = False
 # Handle for thread
 move_thread = None
 
+# Turned
+turn = False
 
 # Calculate the left and right wheel velocities in order to turn a given angle
 # with a specified radius for the arc driven and wheel base
@@ -155,8 +157,8 @@ def move():
         right_error = target_right_ticks - curr_right_ticks
         print("curr_left_ticks: ", curr_left_ticks)
         print("curr_right_ticks: ", curr_right_ticks)
-        print("left_speed: ", calc_speed(curr_left_ticks, 0.8))
-        print("right_speed: ", calc_speed(curr_right_ticks, 0.8))
+        print("curr_left_speed: ", calc_speed(curr_left_ticks, 0.8))
+        print("curr_right_speed: ", calc_speed(curr_right_ticks, 0.8))
         print("left_error: ", kp*left_error)
         print("right_error: ", kp*right_error)
 
@@ -190,20 +192,36 @@ def move():
     print("Left ticks: ", left_ticks)
     print("Right ticks: ", right_ticks)
 
+callback_count = 0
 
 def motor_callback(point):
-    global target_left_ticks, target_right_ticks, stop
+    global target_left_ticks, target_right_ticks, drive_radius, stop, callback_count, turn
 
+    callback_count += 1
     distance = point.x
     print("Distance received: ", distance)
-    angle = point.y
-    vel_left = get_left_velocity(angle)
-    vel_right = get_right_velocity(angle)
+    angle = point.y if not turn else 0
+    print("Angle received: ", angle)
 
+    if callback_count > 5:
+        turn = True
+
+    # If we want to continue going straight (angle ~ 0), then just set
+    # vel_left = vel_right
+    if abs(angle) < 0.008 and distance > 0.02:
+        vel_left = 0.2
+        vel_right = 0.2
+    elif angle < 0:
+        vel_right = get_left_velocity(abs(angle))
+        vel_left = get_right_velocity(abs(angle))
+    else:
+        vel_left = get_left_velocity(angle)
+        vel_right = get_right_velocity(angle)
+    print("Initial vel_left: ", vel_left)
     # If distance to destination is less than 0.02 meters (1 in), stop
     # If distance is greater than 1 meter, cut off to 1 for speed purposes
     distance = min(distance, 1)
-    if distance < 0.02:
+    if distance < 0.005:
         stop = True
         distance = 0
         move_thread.join()
@@ -213,7 +231,7 @@ def motor_callback(point):
     # (i.e. larger distance corresponds to higher speed and vice versa)
     vel_left *= speed_scale
     vel_right *= speed_scale
-
+    print("vel_left after distance scaling: ", vel_left)
     # Adjust for estimated depth ahead of robot, but give smaller weight
     # due to inaccuracy of depth estimation
     scaled_depth = (100 / middle_depth) * depth_scale_factor
@@ -221,17 +239,18 @@ def motor_callback(point):
     vel_right -= scaled_depth
 
     # Get target ticks for left and right wheels in interval
-    target_left_ticks = velocity_to_ticks(vel_left)
+    target_left_ticks = velocity_to_ticks(vel_left)+15
     target_right_ticks = velocity_to_ticks(vel_right)
-    print("vel_left: ", vel_left)
-    print("vel_right: ", vel_right)
+    print("target_vel_left: ", vel_left)
+    print("target_vel_right: ", vel_right)
     print("target_left_ticks: ", target_left_ticks)
     print("target_right_ticks: ", target_right_ticks)
 
 
 def depth_callback(point):
+    global middle_depth
     middle_depth = point.x
-    #print("average depth: ", middle_depth)
+    print("Depth received: ", middle_depth)
 
 
 def dummy(point):
@@ -240,7 +259,7 @@ def dummy(point):
 
 def listener():
     rospy.init_node('control_motor_listener', anonymous=True)
-    rospy.Subscriber("/control_robot/distance_angle", Point, motor_callback)
+    rospy.Subscriber("/distance_heading/distance_angle", Point, motor_callback)
     rospy.Subscriber("/control_robot/middle_depth", Point, depth_callback)
     rospy.spin()
 
